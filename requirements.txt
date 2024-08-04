@@ -1,3 +1,4 @@
+accelerate 
 fsspec
 flask
 torch
