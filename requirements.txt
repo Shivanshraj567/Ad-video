@@ -1,3 +1,4 @@
+streamlit 
 accelerate 
 fsspec
 flask
