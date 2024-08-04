@@ -1,18 +1,19 @@
+from flask import Flask, request, send_file
+from werkzeug.utils import secure_filename
+import os
 import torch
 import skvideo.io
 from diffusers import I2VGenXLPipeline
 from diffusers.utils import export_to_video, load_image
-import os
-import io
-from PIL import Image
 import numpy as np
 import imageio
 from moviepy.editor import ImageSequenceClip
-import streamlit as st
 from transformers import MusicgenForConditionalGeneration, AutoProcessor
 from scipy.io import wavfile
 from datasets import load_dataset
 import ffmpeg
+
+app = Flask(__name__)
 
 def generate_video(image, prompt, negative_prompt, video_length):
     generator = torch.manual_seed(8888)
@@ -60,45 +61,32 @@ def combine_audio_video(audio_file, video_file, output_file):
     output = ffmpeg.output(video, audio, output_file, vcodec='copy', acodec='aac')
     ffmpeg.run(output)
 
-def main():
-    st.title("Media Generation App")
-    tabs = st.tabs(["Video Generation", "Music Generation", "Combine Audio and Video"])
-    with tabs[0]:
-        uploaded_file = st.file_uploader("Choose an image file", type=["jpg", "jpeg", "png"])
-        if uploaded_file is not None:
-            image_data = uploaded_file.read()
-            image = Image.open(io.BytesIO(image_data))
-            prompt = st.text_input("Enter the prompt:")
-            negative_prompt = st.text_input("Enter the negative prompt:")
-            video_length = st.number_input("Enter the length of the video in seconds:", min_value=1)
-            if st.button("Generate Video"):
-                frames = generate_video(image, prompt, negative_prompt, video_length)
-                output_file = "output_video.mp4"
-                export_frames_to_video(frames, output_file)
-                st.success(f"Video saved as {output_file}")
-                st.video(output_file)
-    with tabs[1]:
-        prompt = st.text_input("Enter the music prompt:")
-        unconditional = st.checkbox("Generate unconditional music")
-        if st.button("Generate Music"):
-            audio_values, sampling_rate = generate_music(prompt, unconditional)
-            wavfile.write("musicgen_out.wav", sampling_rate, audio_values)
-            st.success("Music saved as musicgen_out.wav")
-            st.audio("musicgen_out.wav")
-    with tabs[2]:
-        audio_file = st.file_uploader("Choose an audio file", type=["wav", "mp3"])
-        video_file = st.file_uploader("Choose a video file", type=["mp4"])
-        if audio_file and video_file:
-            audio_filename = audio_file.name
-            video_filename = video_file.name
-            with open(audio_filename, "wb") as f:
-                f.write(audio_file.read())
-            with open(video_filename, "wb") as f:
-                f.write(video_file.read())
-            output_file = "combined_output.mp4"
-            combine_audio_video(audio_filename, video_filename, output_file)
-            st.success(f"Combined audio and video saved as {output_file}")
-            st.video(output_file)
+@app.route('/generate_video', methods=['POST'])
+def generate_video_route():
+    image = request.files['image']
+    prompt = request.form['prompt']
+    negative_prompt = request.form['negative_prompt']
+    video_length = int(request.form['video_length'])
+    frames = generate_video(image, prompt, negative_prompt, video_length)
+    output_file = "output_video.mp4"
+    export_frames_to_video(frames, output_file)
+    return send_file(output_file, as_attachment=True)
 
-if __name__ == "__main__":
-    main()
+@app.route('/generate_music', methods=['POST'])
+def generate_music_route():
+    prompt = request.form['prompt']
+    unconditional = request.form['unconditional'] == 'true'
+    audio_values, sampling_rate = generate_music(prompt, unconditional)
+    wavfile.write("musicgen_out.wav", sampling_rate, audio_values)
+    return send_file("musicgen_out.wav", as_attachment=True)
+
+@app.route('/combine_audio_video', methods=['POST'])
+def combine_audio_video_route():
+    audio_file = request.files['audio_file']
+    video_file = request.files['video_file']
+    output_file = "combined_output.mp4"
+    combine_audio_video(audio_file, video_file, output_file)
+    return send_file(output_file, as_attachment=True)
+
+if __name__ == '__main__':
+    app.run(debug=True,port=5000)
