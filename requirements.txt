@@ -1,6 +1,5 @@
 flask
 torch
-pytorch
 diffusers
 transformers
 scipy
