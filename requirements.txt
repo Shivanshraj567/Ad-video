@@ -6,3 +6,6 @@ scipy
 imageio
 moviepy
 ffmpeg-python
+datasets
+sk_video
+numpy
