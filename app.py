@@ -1,52 +1,57 @@
-import streamlit as st
-from PIL import Image
+import gradio as gr
 import torch
-import skvideo.io
-from diffusers import I2VGenXLPipeline
-from diffusers.utils import export_to_video, load_image
 import numpy as np
-import imageio
-from moviepy.editor import ImageSequenceClip
+from diffusers import I2VGenXLPipeline
 from transformers import MusicgenForConditionalGeneration, AutoProcessor
-from scipy.io import wavfile
+from PIL import Image
+from moviepy.editor import ImageSequenceClip
+import io
+import scipy.io.wavfile
 import ffmpeg
-import time
 
 def generate_video(image, prompt, negative_prompt, video_length):
     generator = torch.manual_seed(8888)
+
+    # Set the device to CPU or a non-NVIDIA GPU
     device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
     print(f"Using device: {device}")
+
+    # Load the pipeline
     pipeline = I2VGenXLPipeline.from_pretrained("ali-vilab/i2vgen-xl", torch_dtype=torch.float32)
-    pipeline.to(device)
-    
-    # Simulate progress for video generation
+    pipeline.to(device)  # Move the model to the selected device
+
+    # Generate frames with progress tracking
     frames = []
-    for i in range(video_length * 20):  # Assuming 20 frames per second
+    total_frames = video_length * 20  # Assuming 30 frames per second
+
+    for i in range(total_frames):
         frame = pipeline(
             prompt=prompt,
             image=image,
-            num_inference_steps=2,
+            num_inference_steps=1,
             negative_prompt=negative_prompt,
             guidance_scale=9.0,
             generator=generator,
             num_frames=1
         ).frames[0]
-        frames.append(frame)
-        st.progress((i + 1) / (video_length * 20))  # Update progress bar
-    
-    return frames
+        frames.append(np.array(frame))
 
-def export_frames_to_video(frames, output_file):
-    frames_np = [np.array(frame) for frame in frames]
-    clip = ImageSequenceClip(frames_np, fps=30)
+        # Update progress
+        yield (i + 1) / total_frames  # Yield progress
+
+    # Create a video clip from the frames
+    output_file = "output_video.mp4"
+    clip = ImageSequenceClip(frames, fps=30)  # Set the frames per second
     clip.write_videofile(output_file, codec='libx264', audio=False)
+
+    return output_file
 
 def generate_music(prompt, unconditional=False):
     model = MusicgenForConditionalGeneration.from_pretrained("facebook/musicgen-small")
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
     model.to(device)
-    
-    # Simulate progress for music generation
+
+    # Generate music
     if unconditional:
         unconditional_inputs = model.get_unconditional_inputs(num_samples=1)
         audio_values = model.generate(**unconditional_inputs, do_sample=True, max_new_tokens=256)
@@ -58,48 +63,60 @@ def generate_music(prompt, unconditional=False):
             return_tensors="pt",
         )
         audio_values = model.generate(**inputs.to(device), do_sample=True, guidance_scale=3, max_new_tokens=256)
-    
-    sampling_rate = model.config.audio_encoder.sampling_rate
-    return audio_values[0].cpu().numpy(), sampling_rate
 
-def combine_audio_video(audio_file, video_file, output_file):
+    sampling_rate = model.config.audio_encoder.sampling_rate
+    audio_file = "musicgen_out.wav"
+    
+    # Ensure audio_values is 1D and scale if necessary
+    audio_data = audio_values[0].cpu().numpy()
+    
+    # Check if audio_data is in the correct format
+    if audio_data.ndim > 1:
+        audio_data = audio_data[0]  # Take the first channel if stereo
+
+    # Scale audio data to 16-bit PCM format
+    audio_data = np.clip(audio_data, -1.0, 1.0)  # Ensure values are in the range [-1, 1]
+    audio_data = (audio_data * 32767).astype(np.int16)  # Scale to int16
+
+    # Save the generated audio
+    scipy.io.wavfile.write(audio_file, sampling_rate, audio_data)
+    
+    return audio_file
+
+def combine_audio_video(audio_file, video_file):
+    output_file = "combined_output.mp4"
     audio = ffmpeg.input(audio_file)
     video = ffmpeg.input(video_file)
     output = ffmpeg.output(video, audio, output_file, vcodec='copy', acodec='aac')
     ffmpeg.run(output)
+    return output_file
 
-st.title("AI-Powered Video and Music Generation")
+def interface(image_path, prompt, negative_prompt, video_length, music_prompt, unconditional):
+    image = Image.open(image_path)
+    video_file = generate_video(image, prompt, negative_prompt, video_length)
+    audio_file = generate_music(music_prompt, unconditional)
+    combined_file = combine_audio_video(audio_file, video_file)
+    return combined_file
 
-st.sidebar.title("Options")
-
-st.sidebar.subheader("Video Generation")
-image = st.sidebar.file_uploader("Upload an image", type=["jpg", "png"])
-prompt = st.sidebar.text_input("Enter the prompt")
-negative_prompt = st.sidebar.text_input("Enter the negative prompt")
-video_length = st.sidebar.number_input("Enter the video length (seconds)", min_value=1, value=10)
-
-st.sidebar.subheader("Music Generation")
-music_prompt = st.sidebar.text_input("Enter the music prompt")
-unconditional = st.sidebar.checkbox("Generate unconditional music")
-
-if st.sidebar.button("Generate Video and Music"):
-    if image is not None:
-        image = Image.open(image)
-        
-        # Video generation with progress bar
-        st.write("Generating video...")
-        video_frames = generate_video(image, prompt, negative_prompt, video_length)
-        export_frames_to_video(video_frames, "output_video.mp4")
-        st.video("output_video.mp4")
-
-    # Music generation with progress bar
-    st.write("Generating music...")
-    audio_values, sampling_rate = generate_music(music_prompt, unconditional)
-    wavfile.write("musicgen_out.wav", sampling_rate, audio_values)
-    st.audio("musicgen_out.wav")
-
-    # Combine audio and video
-    st.write("Combining audio and video...")
-    combine_audio_video("musicgen_out.wav", "output_video.mp4", "combined_output.mp4")
-    st.video("combined_output.mp4")
+with gr.Blocks() as demo:
+    gr.Markdown("# AI-Powered Video and Music Generation")
     
+    with gr.Row():
+        image_input = gr.Image(type="filepath", label="Upload Image")
+        prompt_input = gr.Textbox(label="Enter the Video Prompt")
+        negative_prompt_input = gr.Textbox(label="Enter the Negative Prompt")
+        video_length_input = gr.Number(label="Video Length (seconds)", value=10, precision=0)
+        music_prompt_input = gr.Textbox(label="Enter the Music Prompt")
+        unconditional_checkbox = gr.Checkbox(label="Generate Unconditional Music")
+
+    generate_button = gr.Button("Generate Video and Music")
+    output_video = gr.Video(label="Output Video with Sound")
+
+    generate_button.click(
+        interface,
+        inputs=[image_input, prompt_input, negative_prompt_input, video_length_input, music_prompt_input, unconditional_checkbox],
+        outputs=output_video,
+        show_progress=True
+    )
+
+demo.launch()
