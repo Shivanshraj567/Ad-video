@@ -22,13 +22,13 @@ def generate_video(image, prompt, negative_prompt, video_length):
 
     # Generate frames with progress tracking
     frames = []
-    total_frames = video_length * 20  # Assuming 30 frames per second
+    total_frames = video_length * 30  # Assuming 30 frames per second
 
     for i in range(total_frames):
         frame = pipeline(
             prompt=prompt,
             image=image,
-            num_inference_steps=1,
+            num_inference_steps=5,
             negative_prompt=negative_prompt,
             guidance_scale=9.0,
             generator=generator,
