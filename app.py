@@ -28,7 +28,7 @@ def generate_video(image, prompt, negative_prompt, video_length):
         frame = pipeline(
             prompt=prompt,
             image=image,
-            num_inference_steps=5,
+            num_inference_steps=50,
             negative_prompt=negative_prompt,
             guidance_scale=9.0,
             generator=generator,
